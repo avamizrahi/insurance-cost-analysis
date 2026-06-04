@@ -1,0 +1,248 @@
+---
+title: "DATA Midterm Project"
+author: "Ava Mizrahi"
+date: "2025-10-06"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Set Up
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+```
+
+```{r}
+# reproducibility 
+set.seed(123)
+
+# Load dataset
+# Download dataset from Kaggle if not already present
+if (!file.exists("insurance.csv")) {
+  url <- "https://raw.githubusercontent.com/stedy/Machine-Learning-with-R-datasets/master/insurance.csv"
+  download.file(url, destfile = "insurance.csv", method = "curl")}
+insurance <- read.csv("insurance.csv")
+
+# Preview the dataset
+head(insurance)
+str(insurance)
+summary(insurance)
+```
+Data contains 1338 observations and 7 variables. The numerical variables are age, bmi, children, and charges. The categorical variables are sex, smoker, region. This dataset provides demographic and lifestyle information for individuals corresponding with their medical insurance cost billed in the US. All variables are loaded correctly and there are no missing values.
+
+
+
+
+
+## Data Cleaning
+```{r}
+insurance <- insurance %>%
+  mutate(
+    sex = factor(sex),
+    smoker = factor(smoker),
+    region = factor(region))
+
+str(insurance)
+```
+
+I converted the character columns (sex, smoker, region) into factors to make sure they're treated as categorical predictors. It allows R to create dummy variables automatically when fitting regression models. Each factor level (ex. "male", "female") will have its own coefficient. 
+
+
+## Exploratory Data Analysis
+```{r}
+summary(insurance)
+```
+Mean age is 39, mean BMI is 30.7, there are 274 smokers and 1064 non-smokers, and the average medical charge is $13,270. There is a large range that goes from $1,122 to $63,770. Since the medical costs vary so widely, there could be a skew from a few individuals with extremely high expenses. They tested a similar number of males and females and a similar number of people from each region, so the data seems well spread out. 
+
+
+
+
+
+
+```{r}
+# Looking at Relationships Visually
+# Age vs. Charges
+ggplot(insurance, aes(x = age, y = charges)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Medical Charges vs Age", x = "Age", y = "Charges")
+
+# BMI vs. Charges
+ggplot(insurance, aes(x = bmi, y = charges)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Medical Charges vs BMI", x = "BMI", y = "Charges")
+
+# Children vs. Charges
+ggplot(insurance, aes(x = children, y = charges)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Medical Charges vs Children", x = "Children", y = "Charges")
+
+# Smoker vs. Charges
+ggplot(insurance, aes(x = smoker, y = charges, fill = smoker)) +
+  geom_boxplot() +
+  labs(title = "Charges by Smoking Status", x = "Smoker", y = "Charges")
+
+# Sex vs. Charges
+ggplot(insurance, aes(x = sex, y = charges, fill = sex)) +
+  geom_boxplot() +
+  labs(title = "Charges by Sex", x = "Sex", y = "Charges")
+
+# Region vs. Charges
+ggplot(insurance, aes(x = region, y = charges, fill = region)) +
+  geom_boxplot() +
+  labs(title = "Charges by Region")
+```
+
+Age vs Charges: scatterplot shows a positive relationship (as age increases, the insurance charges rise). The fitted line shows a roughly linear trend. Variability in charges increases with age since older individuals show both very low and very high costs. The increasing spread of points suggests mild heteroscedasticity.
+
+BMI vs Charges: positive relationship (higher BMI corresponds to higher charges). Some high BMI individuals (outliers) have extremely high charges. The pattern suggests that medical expenses rise non-linearly after a certain BMI, although a linear term still captures the general relationship. The increase in charges is sharper beyond a BMI of ~30.
+
+Children vs. Charges: The trend line implies that as the number of children increases, medical charges tend to rise slightly. However, the spread of data points looks quite wide—suggesting low explanatory power. 
+
+Smoker vs. Charges: smokers have dramatically higher charges than non-smokers. This variable will likely be the strongest predictor in the model. Non-smokers cluster mostly below $15,000, while smokers range up to $60,000 or more. The visual also hints at possible interaction with BMI.
+
+Sex vs. Charges: both distributions are right-skewed, the wider spread for males might suggest unequal variances. The median medical charges are slightly higher for males than for females, suggesting that on average, males incur more medical expenses. 
+
+Region vs. Charges: regional differences are minor, the distributions heavily overlap, region probably only has a small effect on cost. Including region allows control for unobserved cost differences but is not expected to meaningfully improve model fit.
+
+
+## Multiple Linear Regression Model
+```{r}
+full_model <- lm(charges ~ age + sex + bmi + children + smoker + region, data = insurance)
+summary(full_model)
+```
+
+The residuals range from –11,300 to +29,900 with the mean residual being -982, suggesting a slight left skew in residuals. The interquartile range (IQR) spans from –2,848 to +1,394, showing asymmetry and potential heteroscedasticity. 
+The large spread, especially the maximum positive residual, shows that a few individuals have extremely high charges that the model underpredicts. The strongest predictors are smoker, age, and bmi while sex and most regions show to be non-significant. The effects of smoking increases charges by tens of thousands, compared to hundreds for other predictors. The RSE is relatively high but reasonable given the wide range of charges. The R squared says that the model explains about 75% of the total variations in charges, which is a strong fit. The adjusted R squared is slightly lower, but doesn't really show overfitting. The F-stat shows that the overall model is highly significant, so at least one predictor is strongly related to the outcome. The model is effective in explaining variation in insurance costs.
+
+
+
+```{r}
+# Checking model assumptions
+par(mfrow = c(2,2))
+plot(full_model)
+par(mfrow = c(1,1))
+```
+
+Residuals vs Fitted: slight curve around the red line, suggesting mild non-linearity. This violates the linearity assumption.
+Q-Q Plot: Most points lie on the line, but there’s deviation at the tails. Residuals are approximately normal, but heavy tails suggest outliers or skewness.
+Scale-Location Plot: Mild heteroscedasticity, variance of residuals isn’t constant.
+Residuals vs Leverage: Observations labeled “5440” and “5540” have high leverage and large residuals.
+
+
+
+## Identify Outliers & Influential Points
+```{r}
+stud_res <- rstudent(full_model)
+
+# flagging points whose studentized residual exceeds +/- 3 for outliers
+which(abs(stud_res) > 3)
+
+# Cooks Distance
+CooksDist <- cooks.distance(full_model)
+plot(CooksDist, type = "h", main = "Cook's Distance", ylab = "Cook's D")
+abline(h= 4/length(CooksDist), col = "red", lty= 2)
+
+#Influential points using Cooks Distance
+influential_pt <- which(CooksDist > (4/length(CooksDist)) | abs(stud_res) > 3)
+influential_pt
+```
+Flagging observations where |rstudent| > 3, which is a solid threshold for identifying outliers in regression diagnostics. 27 potential outliers with the Cook's distance plot flagging some influential observations (high leverage, large residual). Some points may be both outliers and influential (e.g., 544, 689, 988), which makes them especially important to investigate. 91 observations that are high leverage and influence and/or extreme residuals. 
+
+
+## Comparing model without influential points
+```{r}
+
+clean_model <- lm(charges ~ age + bmi + children + smoker + region, 
+                  data = insurance[-influential_pt, ])
+summary(clean_model)
+
+par(mfrow = c(1, 2)) 
+
+# Plot Residuals vs Fitted
+plot(fitted(full_model), stud_res,
+     main = "Residuals vs Fitted",
+     xlab = "Fitted Values", ylab = "Studentized Residuals")
+abline(h = c(-3, 0, 3), col = c("red", "black", "red"), lty = c(2, 1, 2))
+points(fitted(full_model)[influential_pt], stud_res[influential_pt],
+       col = "blue", pch = 19)
+
+# Plot Leverage vs Studentized Residuals
+plot(hatvalues(full_model), stud_res,
+     main = "Leverage vs Studentized Residuals",
+     xlab = "Leverage", ylab = "Studentized Residuals")
+abline(h = c(-3, 3), col = "red", lty = 2)
+abline(v = 2 * length(coef(full_model)) / nrow(insurance),
+       col = "red", lty = 2)
+points(hatvalues(full_model)[influential_pt], stud_res[influential_pt],
+       col = "blue", pch = 19)
+
+par(mfrow = c(1, 1))
+
+```
+
+Residuals vs Fitted plot: Blue points above the red dashed line at y = 3 are clear outliers. The spread of residuals across fitted values shows mild curvature, suggesting some non-linearity remains. This visualization confirms that flagged points are not randomly scattered, they cluster at higher fitted values, which may reflect high-cost cases (e.g., smokers with high BMI).
+
+Leverage vs Studentized Residuals: Blue points beyond both the horizontal (±3) and vertical lines are high-leverage outliers, they exert disproportionate influence on the regression line. 
+
+
+
+## Comparing Models
+```{r}
+step_model <- step(clean_model, direction = "both")
+summary(step_model)
+```
+
+Step model did not remove any predictors, so it is the same as the clean model. All predictors are significant at the 0.05 level.
+
+```{r}
+AIC(full_model, clean_model)
+summary(full_model)$adj.r.squared
+summary(clean_model)$adj.r.squared
+summary(full_model)$sigma
+summary(clean_model)$sigma
+```
+Adjusted R squared: improved by about 10 percentage points, cleaned model explains about 85% of the variation in insurance charges (was 75% before cleaning)
+RSE: The average error in predicted insurance charges decreased by roughly $1,500, indicating tighter residuals and better prediction accuracy.
+AIC: A decrease of ~2,683 points is enormous, far greater than the threshold of 10 that indicates a better-fitting model.
+Influential data points were not random noise, but they were distorting the model fit. The relationships between predictors and charges remain the same, meaning the model’s conclusions are robust, not driven by outliers.
+
+
+## Multicollinearity Check
+```{r}
+X <- model.matrix(clean_model)[, -1]
+vif_vals <- diag(solve(cor(X)))
+vif_vals
+
+cor(select(insurance, age, bmi, children))
+```
+All VIF values are well below 5 and all below 2, so the predictors are not correlated enough to inflate the standard errors of the coefficients. On the correlation matrix, all pairwise correlations are very low (|r| < 0.2), which means age, BMI, and number of children vary independently.
+
+
+## 95% CI and PI for New Case
+```{r}
+new_person <- data.frame(
+  age = 40,
+  sex = "female",
+  bmi = 25,
+  children = 2,
+  smoker = "no",
+  region = "northwest")
+
+predict(clean_model, newdata = new_person, interval = "confidence", level = 0.95)
+predict(clean_model, newdata = new_person, interval = "prediction", level = 0.95)
+```
+Predicted Mean: The model predicts an average charge of about $6,389 for a 40-year-old non-smoking female with BMI 25, two children, and living in the northwest region.
+
+95% CI: The CI of $5,803–$6,976 represents the uncertainty in estimating the average medical cost for people with those characteristics. We are 95% confident that the mean insurance charge for individuals with these characteristics lies between $5,800 and $7,000.
+
+
+
+
+
